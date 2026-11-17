@@ -502,13 +502,17 @@ select t.as_user(t.id('admin_u'));
 select public.review_payment((select (x->>'id')::uuid from jsonb_array_elements(public.list_payments(t.id('org'),'pending')) x limit 1), true, '');
 select t.as_user(t.id('treas_u'));
 select public.disburse_loan(t.id('ln2'),'cash',null);
--- Pretend it was paid out long enough ago that payment 1 is 17 days late
+-- Pretend it was paid out long enough ago that payment 1 is 11 to 17 days late (2 weeks of fees after 3 grace days).
+-- The exact number depends on today's date: "one month before the 31st" does not exist in every month,
+-- so we pick the latest day that works on any calendar date.
 reset role;
-update public.loans set disbursed_at = (current_date - 17 - interval '1 month') where id = t.id('ln2');
-select t.ok((select due_date from public.loan_sched(t.id('ln2')) where installment=1) = current_date - 17,'first payment was due 17 days ago');
+insert into t.n select 'late', max(d) from generate_series(11,17) d
+  where ((current_date - d) - interval '1 month' + interval '1 month')::date = current_date - d;
+update public.loans set disbursed_at = (current_date - (select v from t.n where k='late')::int - interval '1 month') where id = t.id('ln2');
+select t.ok((select due_date from public.loan_sched(t.id('ln2')) where installment=1) = current_date - (select v from t.n where k='late')::int,'first payment was due 11 to 17 days ago');
 select t.ok((public.loan_late_fees(t.id('ln2'))->>'total')::bigint=800,'late fee: 10% of 4000, 2 weeks');
 select t.ok(public.loan_remaining(t.id('ln2'))=14000,'owed now: 12000 + 1200 interest + 800 late fee');
-select t.ok(public.loan_arrears_days(t.id('ln2'))=17,'17 days in arrears');
+select t.ok(public.loan_arrears_days(t.id('ln2'))=(select v from t.n where k='late'),'days in arrears match');
 set role authenticated;
 select t.as_user(t.id('ann_u'));
 select t.ok((public.loan_late_fee_report(t.id('ln2'))->>'due')::bigint=800,'borrower sees her late fee');
